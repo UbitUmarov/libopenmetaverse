@@ -41,53 +41,6 @@ namespace OpenMetaverse
 {
     public static partial class Utils
     {
-        public static readonly bool CanDirectCopyLE = CheckNeedAlignment();
-
-        public unsafe static bool CheckNeedAlignment()
-        {
-            if(!BitConverter.IsLittleEndian)
-                return false;
-
-            byte[] bytes = new byte[4096];
-            long ll = 0x55AA33EE55FFCCAA;
-            long l;
-            try
-            {
-                for (int i = 0; i < 512; i += 3)
-                {
-                    fixed (byte* ptr = &bytes[253 + i])
-                        *(long*)ptr = ll;
-
-                    fixed (byte* ptr = &bytes[1027 + i])
-                    {
-                        byte* p = ptr;
-                        *p++ = (byte)ll;
-                        *p++ = (byte)(ll >> 8);
-                        *p++ = (byte)(ll >> 16);
-                        *p++ = (byte)(ll >> 24);
-                        *p++ = (byte)(ll >> 32);
-                        *p++ = (byte)(ll >> 40);
-                        *p++ = (byte)(ll >> 48);
-                        *p = (byte)(ll >> 56);
-                    }
-
-                    fixed (byte* ptr = &bytes[253 + i])
-                        l = *(long*)ptr;
-                    if (l != ll)
-                        return false;
-
-                    fixed (byte* ptr = &bytes[1027 + i])
-                        l = *(long*)ptr;
-                    if (l != ll)
-                        return false;
-                }
-                return true;
-            }
-            catch { }
-            return false;
-
-        }
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static T UnsafeGetArrayValue<T>(T[] data)
         {
@@ -281,8 +234,8 @@ namespace OpenMetaverse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static unsafe short BytesToInt16(byte* bytes)
         {
-            return CanDirectCopyLE ?
-                *(short*)bytes :
+            return BitConverter.IsLittleEndian ?
+                Unsafe.ReadUnaligned<short>(ref Unsafe.AsRef<byte>(bytes)) :
                 (short)(*bytes | (bytes[1] << 8));
         }
 
@@ -382,9 +335,9 @@ namespace OpenMetaverse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe static int BytesToInt(byte* bytes)
         {
-            return CanDirectCopyLE ?
-                *(int*)bytes :
-                *bytes | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+            return BitConverter.IsLittleEndian ?
+                Unsafe.ReadUnaligned<int>(ref Unsafe.AsRef<byte>(bytes)) :
+                BinaryPrimitives.ReverseEndianness(Unsafe.ReadUnaligned<int>(ref Unsafe.AsRef<byte>(bytes)));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -457,20 +410,16 @@ namespace OpenMetaverse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe static long BytesToInt64(byte* bytes)
         {
-            if (CanDirectCopyLE)
-            {
-                return *(long*)bytes;
-            }
-            else
-                return
-                    bytes[0] |
-                    ((long)bytes[1] << 8) |
-                    ((long)bytes[2] << 16) |
-                    ((long)bytes[3] << 24) |
-                    ((long)bytes[4] << 32) |
-                    ((long)bytes[5] << 40) |
-                    ((long)bytes[6] << 48) |
-                    ((long)bytes[7] << 56);
+            return BitConverter.IsLittleEndian ?
+                Unsafe.ReadUnaligned<long>(ref Unsafe.AsRef<byte>(bytes)) :
+                bytes[0] |
+                ((long)bytes[1] << 8) |
+                ((long)bytes[2] << 16) |
+                ((long)bytes[3] << 24) |
+                ((long)bytes[4] << 32) |
+                ((long)bytes[5] << 40) |
+                ((long)bytes[6] << 48) |
+                ((long)bytes[7] << 56);
         }
 
         /// <summary>
@@ -566,10 +515,9 @@ namespace OpenMetaverse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static unsafe ushort BytesToUInt16(byte* bytes)
         {
-            if (CanDirectCopyLE)
-                return *(ushort*)bytes;
-            else
-                return (ushort)(*bytes + (bytes[1] << 8));
+            return BitConverter.IsLittleEndian ?
+                Unsafe.ReadUnaligned<ushort>(ref Unsafe.AsRef<byte>(bytes)) :
+                (ushort)(*bytes + (bytes[1] << 8));
         }
 
         /// <summary>
@@ -692,16 +640,9 @@ namespace OpenMetaverse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe static uint BytesToUInt(byte* bytes)
         {
-            if (CanDirectCopyLE)
-            {
-                return *(uint*)bytes;
-            }
-            else
-                return (uint)(
-                    bytes[0] |
-                    (bytes[1] << 8) |
-                    (bytes[2] << 16) |
-                    (bytes[3] << 24));
+            return BitConverter.IsLittleEndian ?
+                Unsafe.ReadUnaligned<uint>(ref Unsafe.AsRef<byte>(bytes)) :
+                (uint)BinaryPrimitives.ReverseEndianness(Unsafe.ReadUnaligned<int>(ref Unsafe.AsRef<byte>(bytes)));
         }
 
         /// <summary>
@@ -763,7 +704,7 @@ namespace OpenMetaverse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ulong BytesToUInt64Big(byte[] bytes)
         {
-            return (ulong)BytesToUInt64Big(bytes);
+            return (ulong)BytesToInt64Big(bytes);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -793,20 +734,9 @@ namespace OpenMetaverse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe static ulong BytesToUInt64(byte* bytes)
         {
-            if (CanDirectCopyLE)
-            {
-                return *(ulong*)bytes;
-            }
-            else
-                return (ulong)(
-                    bytes[0] |
-                    ((long)bytes[1] << 8) |
-                    ((long)bytes[2] << 16) |
-                    ((long)bytes[3] << 24) |
-                    ((long)bytes[4] << 32) |
-                    ((long)bytes[5] << 40) |
-                    ((long)bytes[6] << 48) |
-                    ((long)bytes[7] << 56));
+            return BitConverter.IsLittleEndian ?
+                Unsafe.ReadUnaligned<ulong>(ref Unsafe.AsRef<byte>(bytes)) :
+                (ulong)BinaryPrimitives.ReverseEndianness(Unsafe.ReadUnaligned<long>(ref Unsafe.AsRef<byte>(bytes)));
         }
 
         public static ulong VarBytestoUlong(byte[] bytes, int pos)

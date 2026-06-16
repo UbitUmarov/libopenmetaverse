@@ -25,12 +25,12 @@
  */
 
 using System;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Globalization;
-using System.Text;
-using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
+using System.Text;
 
 namespace OpenMetaverse
 {
@@ -154,7 +154,7 @@ namespace OpenMetaverse
             if (v.W < W) W = v.W;
         }
 
-        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Max(Vector4 v)
         {
             if (v.X > X) X = v.X;
@@ -292,10 +292,15 @@ namespace OpenMetaverse
         public byte[] GetBytes()
         {
             byte[] dest = new byte[16];
-            Utils.FloatToBytesSafepos(X, dest, 0);
-            Utils.FloatToBytesSafepos(Y, dest, 4);
-            Utils.FloatToBytesSafepos(Z, dest, 8);
-            Utils.FloatToBytesSafepos(W, dest, 12);
+            if(BitConverter.IsLittleEndian)
+                Unsafe.WriteUnaligned(ref MemoryMarshal.GetArrayDataReference(dest), this);
+            else
+            {
+                Utils.FloatToBytesSafepos(X, dest, 0);
+                Utils.FloatToBytesSafepos(Y, dest, 4);
+                Utils.FloatToBytesSafepos(Z, dest, 8);
+                Utils.FloatToBytesSafepos(W, dest, 12);
+            }
             return dest;
         }
 
@@ -306,13 +311,10 @@ namespace OpenMetaverse
         /// <param name="pos">Position in the destination array to start
         /// writing. Must be at least 16 bytes before the end of the array</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public unsafe void ToBytes(byte[] dest, int pos)
+        public void ToBytes(byte[] dest, int pos)
         {
-            if (Utils.CanDirectCopyLE)
-            {
-                fixed (byte* d = &dest[0])
-                    *(Vector4*)(d + pos) = this;
-            }
+            if(BitConverter.IsLittleEndian)
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(dest), pos), this);
             else
             {
                 Utils.FloatToBytesSafepos(X, dest, pos);
@@ -325,8 +327,8 @@ namespace OpenMetaverse
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe void ToBytes(byte* dest)
         {
-            if (Utils.CanDirectCopyLE)
-                *(Vector4*)dest = this;
+            if(BitConverter.IsLittleEndian)
+                Unsafe.WriteUnaligned(ref Unsafe.AsRef<byte>(dest), this);
             else
             {
                 Utils.FloatToBytes(X, dest);

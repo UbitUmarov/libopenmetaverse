@@ -415,7 +415,7 @@ namespace OpenMetaverse
                 Utils.FloatToBytes(Z, dest, 8);
             }
 
-            return dest;
+            return dest;    
         }
 
         /// <summary>
