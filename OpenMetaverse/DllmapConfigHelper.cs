@@ -111,7 +111,7 @@ namespace OpenMetaverse
             {
                 if (!File.Exists(path))
                     return null;
-                using FileStream fs = new(path, FileMode.Open);
+                using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
                 using XmlReader reader = XmlReader.Create(fs);
                 XmlSerializer serializer = new(typeof(configuration));
                 c = (configuration)serializer.Deserialize(reader);
