@@ -1,7 +1,7 @@
-using System;
-using System.Collections.Generic;
 using System.Text;
 using System.IO;
+using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 
 namespace CSJ2K.Util
 {
@@ -344,25 +344,7 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
-#if DOTNET
-        public override decimal ReadDecimal()
-        {
-            if (_bigEndian)
-            {
-                // TODO: Is the whole thing reversed or just the individual ints?
-                // Maybe we should just call ReadInt32 4 times?
-                byte[] buf = this.ReadBytes(16);
-                Array.Reverse(buf);
-                int[] decimalints = new int[4];
-                decimalints[0]=BitConverter.ToInt32(buf, 0);
-                decimalints[1]=BitConverter.ToInt32(buf, 4);
-                decimalints[2]=BitConverter.ToInt32(buf, 8);
-                decimalints[3]=BitConverter.ToInt32(buf, 12);
-                return new decimal(decimalints);
-            }
-            else return base.ReadDecimal();
-        }
-#endif
+
         //
         // Summary:
         //     Reads an 8-byte floating point value from the current stream and advances
@@ -380,13 +362,14 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
-        public override double ReadDouble()
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public override unsafe double ReadDouble()
         {
             if (_bigEndian)
             {
-                byte[] buf = this.ReadBytes(8);
-                Array.Reverse(buf);
-                return BitConverter.ToDouble(buf, 0);
+                ulong l = ReadUInt64();
+                return *(double *)&l;
             }
             else
                 return base.ReadDouble();
@@ -408,16 +391,10 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override short ReadInt16()
         {
-            if (_bigEndian)
-            {
-                byte[] buf = this.ReadBytes(2);
-                Array.Reverse(buf);
-                return BitConverter.ToInt16(buf, 0);
-            }
-            else
-                return base.ReadInt16();
+            return _bigEndian ? BinaryPrimitives.ReverseEndianness(base.ReadInt16()) : base.ReadInt16();
         }
         //
         // Summary:
@@ -436,16 +413,10 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int ReadInt32()
         {
-            if (_bigEndian)
-            {
-                byte[] buf = this.ReadBytes(4);
-                Array.Reverse(buf);
-                return BitConverter.ToInt32(buf, 0);
-            }
-            else
-                return base.ReadInt32();
+            return _bigEndian ? BinaryPrimitives.ReverseEndianness(base.ReadInt32()) : base.ReadInt32();
         }
         //
         // Summary:
@@ -464,16 +435,10 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override long ReadInt64()
         {
-            if (_bigEndian)
-            {
-                byte[] buf = this.ReadBytes(8);
-                Array.Reverse(buf);
-                return BitConverter.ToInt64(buf, 0);
-            }
-            else
-                return base.ReadInt64();
+            return _bigEndian ? BinaryPrimitives.ReverseEndianness(base.ReadInt64()) : base.ReadInt64();
         }
         //
         // Summary:
@@ -511,16 +476,11 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
-        public override float ReadSingle()
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public override unsafe float ReadSingle()
         {
-            if (_bigEndian)
-            {
-                byte[] buf = this.ReadBytes(4);
-                Array.Reverse(buf);
-                return BitConverter.ToSingle(buf, 0);
-            }
-            else
-                return base.ReadSingle();
+            int i = ReadInt32();
+            return *(float*)&i;
         }
         //
         // Summary:
@@ -557,16 +517,10 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override ushort ReadUInt16()
         {
-            if (_bigEndian)
-            {
-                byte[] buf = this.ReadBytes(2);
-                Array.Reverse(buf);
-                return BitConverter.ToUInt16(buf, 0);
-            }
-            else
-                return base.ReadUInt16();
+            return _bigEndian ? BinaryPrimitives.ReverseEndianness(base.ReadUInt16()) : base.ReadUInt16();
         }
         //
         // Summary:
@@ -585,16 +539,10 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override uint ReadUInt32()
         {
-            if (_bigEndian)
-            {
-                byte[] buf = this.ReadBytes(4);
-                Array.Reverse(buf);
-                return BitConverter.ToUInt32(buf, 0);
-            }
-            else
-                return base.ReadUInt32();
+            return _bigEndian ? BinaryPrimitives.ReverseEndianness(base.ReadUInt32()) : base.ReadUInt32();
         }
         //
         // Summary:
@@ -613,16 +561,10 @@ namespace CSJ2K.Util
         //
         //   System.IO.EndOfStreamException:
         //     The end of the stream is reached.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override ulong ReadUInt64()
         {
-            if (_bigEndian)
-            {
-                byte[] buf = this.ReadBytes(8);
-                Array.Reverse(buf);
-                return BitConverter.ToUInt64(buf, 0);
-            }
-            else
-                return base.ReadUInt64();
+            return _bigEndian ? BinaryPrimitives.ReverseEndianness(base.ReadUInt64()) : base.ReadUInt64();
         }
     }
 }

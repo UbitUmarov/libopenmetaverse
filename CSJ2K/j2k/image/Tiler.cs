@@ -42,6 +42,8 @@
 * Copyright (c) 1999/2000 JJ2000 Partners.
 * */
 using System;
+using System.Runtime.CompilerServices;
+
 using CSJ2K.j2k.util;
 using CSJ2K.j2k;
 
@@ -82,11 +84,11 @@ namespace CSJ2K.j2k.image
         /// </returns>
         public override int TileWidth
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return tileW;
             }
-
         }
 
         /// <summary> Returns the overall height of the current tile in pixels. This is the
@@ -98,11 +100,11 @@ namespace CSJ2K.j2k.image
         /// </returns>
         public override int TileHeight
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return tileH;
             }
-
         }
 
         /// <summary> Returns the index of the current tile, relative to a standard scan-line
@@ -114,31 +116,31 @@ namespace CSJ2K.j2k.image
         /// </returns>
         public override int TileIdx
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return ty * ntX + tx;
             }
-
         }
 
         /// <summary>Returns the horizontal tile partition offset in the reference grid </summary>
         public override int TilePartULX
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return xt0siz;
             }
-
         }
 
         /// <summary>Returns the vertical tile partition offset in the reference grid </summary>
         public override int TilePartULY
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return yt0siz;
             }
-
         }
 
         /// <summary> Returns the horizontal coordinate of the image origin, the top-left
@@ -151,11 +153,11 @@ namespace CSJ2K.j2k.image
         /// </returns>
         public override int ImgULX
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return x0siz;
             }
-
         }
 
         /// <summary> Returns the vertical coordinate of the image origin, the top-left
@@ -168,11 +170,11 @@ namespace CSJ2K.j2k.image
         /// </returns>
         public override int ImgULY
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return y0siz;
             }
-
         }
 
         /// <summary> Returns the nominal width of the tiles in the reference grid.
@@ -183,11 +185,11 @@ namespace CSJ2K.j2k.image
         /// </returns>
         public override int NomTileWidth
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return xtsiz;
             }
-
         }
 
         /// <summary> Returns the nominal width of the tiles in the reference grid.
@@ -198,11 +200,11 @@ namespace CSJ2K.j2k.image
         /// </returns>
         public override int NomTileHeight
         {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 return ytsiz;
             }
-
         }
 
         /// <summary>The source of image data </summary>
@@ -357,8 +359,8 @@ namespace CSJ2K.j2k.image
                 FacilityManager.getMsgLogger()
                     .printmsg(
                         CSJ2K.j2k.util.MsgLogger_Fields.INFO,
-                        "Automatically adjusted tiling " + "origin to equivalent one (" + xt0siz + "," + yt0siz
-                        + ") so that " + "first tile overlaps the image");
+                        "Automatically adjusted tiling origin to equivalent one (" + xt0siz + "," + yt0siz
+                        + ") so that first tile overlaps the image");
             }
 
             // Calculate the number of tiles
@@ -380,13 +382,13 @@ namespace CSJ2K.j2k.image
         /// <returns> The width of specified tile-component.
         /// 
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int getTileCompWidth(int t, int c)
         {
             if (t != TileIdx)
             {
                 throw new System.InvalidOperationException(
-                    "Asking the width of a tile-component which is " + "not in the current tile (call setTile() or "
-                    + "nextTile() methods before).");
+                    "Asking the width of a tile-component which is not in the current tile");
             }
             return compW[c];
         }
@@ -403,13 +405,13 @@ namespace CSJ2K.j2k.image
         /// <returns> The height of specified tile-component.
         /// 
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int getTileCompHeight(int t, int c)
         {
             if (t != TileIdx)
             {
                 throw new System.InvalidOperationException(
-                    "Asking the width of a tile-component which is " + "not in the current tile (call setTile() or "
-                    + "nextTile() methods before).");
+                    "Asking the width of a tile-component which is not in the current tile");
             }
             return compH[c];
         }
@@ -430,6 +432,7 @@ namespace CSJ2K.j2k.image
         /// number of fractional bits. For floating-point data 0 is returned.
         /// 
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public virtual int getFixedPoint(int c)
         {
             return src.getFixedPoint(c);
@@ -568,6 +571,7 @@ namespace CSJ2K.j2k.image
         /// </summary>
         /// <exception cref="IOException">If an I/O error occurs.
         /// </exception>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void close()
         {
             // Do nothing.
@@ -583,6 +587,7 @@ namespace CSJ2K.j2k.image
         /// <returns> true if the data was originally signed, false if not.
         /// 
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool isOrigSigned(int c)
         {
             return false;
@@ -620,20 +625,19 @@ namespace CSJ2K.j2k.image
             tileH = ty1 - ty0;
             // Set component specific variables
             int nc = src.NumComps;
-            if (compW == null) compW = new int[nc];
-            if (compH == null) compH = new int[nc];
-            if (tcx0 == null) tcx0 = new int[nc];
-            if (tcy0 == null) tcy0 = new int[nc];
+            compW ??= new int[nc];
+            compH ??= new int[nc];
+            tcx0 ??= new int[nc];
+            tcy0 ??= new int[nc];
             for (int i = 0; i < nc; i++)
             {
-                //UPGRADE_WARNING: Data types in Visual C# might be different.  Verify the accuracy of narrowing conversions. "ms-help://MS.VSCC.v80/dv_commoner/local/redirect.htm?index='!DefaultContextWindowIndex'&keyword='jlca1042'"
-                tcx0[i] = (int)System.Math.Ceiling(tx0 / (double)src.getCompSubsX(i));
-                //UPGRADE_WARNING: Data types in Visual C# might be different.  Verify the accuracy of narrowing conversions. "ms-help://MS.VSCC.v80/dv_commoner/local/redirect.htm?index='!DefaultContextWindowIndex'&keyword='jlca1042'"
-                tcy0[i] = (int)System.Math.Ceiling(ty0 / (double)src.getCompSubsY(i));
-                //UPGRADE_WARNING: Data types in Visual C# might be different.  Verify the accuracy of narrowing conversions. "ms-help://MS.VSCC.v80/dv_commoner/local/redirect.htm?index='!DefaultContextWindowIndex'&keyword='jlca1042'"
-                compW[i] = (int)System.Math.Ceiling(tx1 / (double)src.getCompSubsX(i)) - tcx0[i];
-                //UPGRADE_WARNING: Data types in Visual C# might be different.  Verify the accuracy of narrowing conversions. "ms-help://MS.VSCC.v80/dv_commoner/local/redirect.htm?index='!DefaultContextWindowIndex'&keyword='jlca1042'"
-                compH[i] = (int)System.Math.Ceiling(ty1 / (double)src.getCompSubsY(i)) - tcy0[i];
+                double getCompSubsX = src.getCompSubsX(i);
+                tcx0[i] = (int)Math.Ceiling(tx0 / (double)getCompSubsX);
+                compW[i] = (int)Math.Ceiling(tx1 /(double)getCompSubsX) - tcx0[i];
+
+                double getCompSubsY = src.getCompSubsY(i);
+                tcy0[i] = (int)Math.Ceiling(ty0 / (double)getCompSubsY);
+                compH[i] = (int)Math.Ceiling(ty1 / (double)getCompSubsY) - tcy0[i];
             }
         }
 
@@ -642,6 +646,7 @@ namespace CSJ2K.j2k.image
         /// the last one (i.e. there is no next tile).
         /// 
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override void nextTile()
         {
             if (tx == ntX - 1 && ty == ntY - 1)
@@ -671,18 +676,10 @@ namespace CSJ2K.j2k.image
         /// <returns> The current tile's horizontal and vertical indexes..
         /// 
         /// </returns>
-        public override Coord getTile(Coord co)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public override Coord getTileCoord()
         {
-            if (co != null)
-            {
-                co.x = tx;
-                co.y = ty;
-                return co;
-            }
-            else
-            {
-                return new Coord(tx, ty);
-            }
+            return new(tx, ty);
         }
 
         /// <summary> Returns the horizontal coordinate of the upper-left corner of the
@@ -692,6 +689,7 @@ namespace CSJ2K.j2k.image
         /// <param name="c">The component index.
         /// 
         /// </param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int getCompULX(int c)
         {
             return tcx0[c];
@@ -704,6 +702,7 @@ namespace CSJ2K.j2k.image
         /// <param name="c">The component index.
         /// 
         /// </param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int getCompULY(int c)
         {
             return tcy0[c];
@@ -720,18 +719,10 @@ namespace CSJ2K.j2k.image
         /// (Coord.y) directions.
         /// 
         /// </returns>
-        public override Coord getNumTiles(Coord co)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public override Coord getNumTilesCoord()
         {
-            if (co != null)
-            {
-                co.x = ntX;
-                co.y = ntY;
-                return co;
-            }
-            else
-            {
-                return new Coord(ntX, ntY);
-            }
+            return new(ntX, ntY);
         }
 
         /// <summary> Returns the total number of tiles in the image.
@@ -740,6 +731,7 @@ namespace CSJ2K.j2k.image
         /// <returns> The total number of tiles in the image.
         /// 
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public override int getNumTiles()
         {
             return ntX * ntY;
@@ -760,18 +752,10 @@ namespace CSJ2K.j2k.image
         /// <seealso cref="ImgData">
         /// 
         /// </seealso>
-        public Coord getTilingOrigin(Coord co)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public Coord getTilingOriginCoord()
         {
-            if (co != null)
-            {
-                co.x = xt0siz;
-                co.y = yt0siz;
-                return co;
-            }
-            else
-            {
-                return new Coord(xt0siz, yt0siz);
-            }
+            return new(xt0siz, yt0siz);
         }
 
         /// <summary> Returns a String object representing Tiler's informations
@@ -780,11 +764,10 @@ namespace CSJ2K.j2k.image
         /// <returns> Tiler's infos in a string
         /// 
         /// </returns>
-        public override System.String ToString()
+        public override string ToString()
         {
             //UPGRADE_TODO: The equivalent in .NET for method 'java.lang.Object.toString' may return a different value. "ms-help://MS.VSCC.v80/dv_commoner/local/redirect.htm?index='!DefaultContextWindowIndex'&keyword='jlca1043'"
-            return "Tiler: source= " + src + "\n" + getNumTiles() + " tile(s), nominal width=" + xtsiz
-                   + ", nominal height=" + ytsiz;
+            return $"Tiler: source= {src} \n {getNumTiles()} tile(s), nominal width= {xtsiz}, nominal height= {ytsiz}";
         }
     }
 }

@@ -189,16 +189,9 @@ namespace CSJ2K.Util
             throw new NoNextElementException();
         }
 
-        public Coord getTile(Coord co)
+        public Coord getTileCoord()
         {
-            if (co != null)
-            {
-                co.x = 0;
-                co.y = 0;
-                return co;
-            }
-
-            return new Coord(0, 0);
+            return new();
         }
 
         public int getCompULX(int c)
@@ -211,16 +204,9 @@ namespace CSJ2K.Util
             return 0;
         }
 
-        public Coord getNumTiles(Coord co)
+        public Coord getNumTilesCoord()
         {
-            if (co != null)
-            {
-                co.x = 1;
-                co.y = 1;
-                return co;
-            }
-
-            return new Coord(1, 1);
+            return Coord.Ones;
         }
 
         public int getNumTiles()
@@ -240,12 +226,14 @@ namespace CSJ2K.Util
                 throw new ArgumentOutOfRangeException("c");
             }
 
+            // The encoder expects unsigned samples level shifted to be centered on 0
+            int shift = this.sgnd[c] ? 0 : 1 << (this.rb - 1);
             var data = new int[blk.w * blk.h];
             for (int y = blk.uly, k = 0; y < blk.uly + blk.h; ++y)
             {
-                for (int x = blk.ulx, xy = blk.uly * this.w + blk.ulx; x < blk.ulx + blk.w; ++x, ++k, ++xy)
+                for (int x = blk.ulx, xy = y * this.w + blk.ulx; x < blk.ulx + blk.w; ++x, ++k, ++xy)
                 {
-                    data[k] = this.comps[c][xy];
+                    data[k] = this.comps[c][xy] - shift;
                 }
             }
 

@@ -658,20 +658,11 @@ namespace CSJ2K.j2k.image
         /// <returns> The current tile's coordinates.
         /// 
         /// </returns>
-        public virtual Coord getTile(Coord co)
+        public virtual Coord getTileCoord()
         {
-            if (co != null)
-            {
-                co.x = 0;
-                co.y = 0;
-                return co;
-            }
-            else
-            {
-                return new Coord(0, 0);
-            }
+            return new();
         }
-        
+
         /// <summary> Returns the horizontal coordinate of the upper-left corner of the
         /// specified component in the current tile.
         /// 
@@ -709,18 +700,9 @@ namespace CSJ2K.j2k.image
         /// (Coord.y) directions.
         /// 
         /// </returns>
-        public virtual Coord getNumTiles(Coord co)
+        public virtual Coord getNumTilesCoord()
         {
-            if (co != null)
-            {
-                co.x = 1;
-                co.y = 1;
-                return co;
-            }
-            else
-            {
-                return new Coord(1, 1);
-            }
+            return Coord.Ones;
         }
         
         /// <summary> Returns the total number of tiles in the image. This default

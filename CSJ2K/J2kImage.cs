@@ -2,6 +2,7 @@
 // Licensed under the BSD 3-Clause License.
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -19,6 +20,7 @@ using CSJ2K.j2k.decoder;
 using CSJ2K.j2k.encoder;
 using CSJ2K.j2k.entropy.decoder;
 using CSJ2K.j2k.entropy.encoder;
+using CSJ2K.j2k.fileformat;
 using CSJ2K.j2k.fileformat.reader;
 using CSJ2K.j2k.fileformat.writer;
 using CSJ2K.j2k.image;
@@ -44,22 +46,13 @@ namespace CSJ2K
         #region Static Decoder Methods
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static PortableImage FromFile(string filename, ParameterList parameters = null)
-        {
-            using (var stream = FileStreamFactory.New(filename, "r"))
-            {
-                return PortableImageFromStream(stream, parameters);
-            }
-        }
-
-
-        public static PortableImage PortableImageFromBytes(byte[] j2kdata, ParameterList parameters = null)
+        public static Image FromBytes(byte[] j2kdata, ParameterList parameters = null, bool stripAlpha = false, int Discard = -1)
         {
             using MemoryStream stream = new(j2kdata);
-            return PortableImageFromStream(stream, parameters);
+            return FromStream(stream, parameters, stripAlpha, Discard);
         }
 
-        public static PortableImage PortableImageFromStream(Stream stream, ParameterList parameters = null)
+        public static Image FromStream(Stream stream, ParameterList parameters = null, bool stripAlpha = false, int Discard = -1)
         {
             RandomAccessIO in_stream = new ISRandomAccessIO(stream);
 
@@ -71,9 +64,7 @@ namespace CSJ2K
             FileFormatReader ff = new FileFormatReader(in_stream);
             ff.readFileFormat();
             if (ff.JP2FFUsed)
-            {
                 in_stream.seek(ff.FirstCodeStreamPos);
-            }
 
             // +----------------------------+
             // | Instantiate decoding chain |
@@ -103,6 +94,41 @@ namespace CSJ2K
                 depth[i] = hd.getOriginalBitDepth(i);
             }
 
+            // **** Discard (reduced resolution) ****
+            // the target resolution must be known to the bitstream reader so the subband tree, and with it
+            // the tile sizes, are built for it; the caller's "res" is restored afterwards
+            string prevRes = null;
+            bool setRes = false;
+            if (Discard >= 0)
+            {
+                int targetRes = decSpec.dls.Min;
+                if (Discard == 0)
+                    targetRes = 0;
+                else
+                {
+                    int bw = MathUtil.log2(hd.ImgWidth);
+                    int bh = MathUtil.log2(hd.ImgHeight);
+                    int d = (bw + bh - Discard) / 2;
+                    if (d > 0)
+                    {
+                        if (d > bh - 1)
+                            d = bh - 1;
+                        if (d > bw - 1)
+                            d = bw - 1;
+
+                        if (d > 0)
+                        {
+                            targetRes -= d;
+                            if (targetRes < 0)
+                                targetRes = 0;
+                        }
+                    }
+                }
+                pl.TryGetValue("res", out prevRes);
+                pl["res"] = targetRes.ToString();
+                setRes = true;
+            }
+
             // **** Bit stream reader ****
             BitstreamReaderAgent breader;
             try
@@ -116,6 +142,16 @@ namespace CSJ2K
             catch (ArgumentException e)
             {
                 throw new InvalidOperationException("Cannot instantiate bit stream reader.", e);
+            }
+            finally
+            {
+                if (setRes)
+                {
+                    if (prevRes == null)
+                        pl.Remove("res");
+                    else
+                        pl["res"] = prevRes;
+                }
             }
 
             // **** Entropy decoder ****
@@ -181,7 +217,8 @@ namespace CSJ2K
                     ColorSpace csMap = new ColorSpace(in_stream, hd, pl);
                     BlkImgDataSrc channels = hd.createChannelDefinitionMapper(ictransf, csMap);
                     BlkImgDataSrc resampled = hd.createResampler(channels, csMap);
-                    BlkImgDataSrc palettized = hd.createPalettizedColorSpaceMapper(resampled, csMap);
+                    // the palette mapper only handles palettized (1 or 3 component) images
+                    BlkImgDataSrc palettized = csMap.Palettized ? hd.createPalettizedColorSpaceMapper(resampled, csMap) : resampled;
                     color = hd.createColorSpaceMapper(palettized, csMap);
                 }
                 catch (ArgumentException e)
@@ -206,274 +243,47 @@ namespace CSJ2K
             {
                 decodedImage = ictransf;
             }
-            var numComps = decodedImage.NumComps;
-            var imgWidth = decodedImage.ImgWidth;
 
-            // **** Copy to Bitmap ****
+            int numComps = decodedImage.NumComps;
+            int imgWidth = decodedImage.ImgWidth;
+            int imgHeight = decodedImage.ImgHeight;
 
-            var bitsUsed = new int[numComps];
-            for (var j = 0; j < numComps; ++j) bitsUsed[j] = decodedImage.getNomRangeBits(numComps - 1 - j);
+            bool hasAlpha = !stripAlpha && (numComps == 2 || numComps >= 4);
+            int outputBytesPerPixel = hasAlpha ? 4 : 3;
+            var pixelFormat = hasAlpha ? PixelFormat.Format32bppArgb : PixelFormat.Format24bppRgb;
 
-            int limitedNumComps = numComps > 4 ? 4 : numComps;
-            var dst = new PortableImage(imgWidth, decodedImage.ImgHeight, limitedNumComps, bitsUsed);
-
-            Coord numTiles = decodedImage.getNumTiles(null);
-
-            int tIdx = 0;
-
-            for (int y = 0; y < numTiles.y; y++)
+            // source component for each output byte (B,G,R[,A]); gray is replicated and a 5th (bump) component is dropped
+            int[] slotComp = numComps switch
             {
-                // Loop on horizontal tiles
-                for (int x = 0; x < numTiles.x; x++, tIdx++)
-                {
-                    decodedImage.setTile(x, y);
-
-                    int height = decodedImage.getTileCompHeight(tIdx, 0);
-                    int width = decodedImage.getTileCompWidth(tIdx, 0);
-
-                    int tOffx = decodedImage.getCompULX(0)
-                                - (int)Math.Ceiling(decodedImage.ImgULX / (double)decodedImage.getCompSubsX(0));
-
-                    int tOffy = decodedImage.getCompULY(0)
-                                - (int)Math.Ceiling(decodedImage.ImgULY / (double)decodedImage.getCompSubsY(0));
-
-                    DataBlkInt[] db = new DataBlkInt[numComps];
-                    int[] ls = new int[numComps];
-                    int[] mv = new int[numComps];
-                    int[] fb = new int[numComps];
-                    for (int i = 0; i < numComps; i++)
-                    {
-                        db[i] = new DataBlkInt();
-                        ls[i] = 1 << (decodedImage.getNomRangeBits(0) - 1);
-                        mv[i] = (1 << decodedImage.getNomRangeBits(0)) - 1;
-                        fb[i] = decodedImage.getFixedPoint(0);
-                    }
-                    for (int l = 0; l < height; l++)
-                    {
-                        for (int i = numComps - 1; i >= 0; i--)
-                        {
-                            db[i].ulx = 0;
-                            db[i].uly = l;
-                            db[i].w = width;
-                            db[i].h = 1;
-                            decodedImage.getInternCompData(db[i], i);
-                        }
-
-                        int[] k = new int[numComps];
-                        int witdhMinus1 = width - 1;
-                        for (int i = 0; i < numComps; i++) k[i] = db[i].offset + witdhMinus1;
-
-                        var rowvalues = new int[width * numComps];
-
-                        for (int i = width - 1; i >= 0; i--)
-                        {
-                            int[] tmp = new int[numComps];
-                            for (int j = numComps - 1; j >= 0; j--)
-                            {
-                                tmp[j] = (db[j].data_array[k[j]--] >> fb[j]) + ls[j];
-                                tmp[j] = (tmp[j] < 0) ? 0 : ((tmp[j] > mv[j]) ? mv[j] : tmp[j]);
-                            }
-                            var offset = i * limitedNumComps;
-                            switch (numComps)
-                            {
-                                case 1:
-                                    rowvalues[offset + 0] = tmp[0];
-                                    break;
-                                case 3:
-                                    rowvalues[offset + 0] = tmp[2];
-                                    rowvalues[offset + 1] = tmp[1];
-                                    rowvalues[offset + 2] = tmp[0];
-                                    break;
-                                case 4:
-                                case 5:
-                                    rowvalues[offset + 0] = tmp[2];
-                                    rowvalues[offset + 1] = tmp[1];
-                                    rowvalues[offset + 2] = tmp[0];
-                                    rowvalues[offset + 3] = tmp[3];
-                                    break;
-                                default:
-                                    throw new InvalidOperationException($"Invalid number of components: {numComps}");
-                            }
-                        }
-
-                        dst.FillRow(tOffx, tOffy + l, imgWidth, rowvalues);
-                    }
-                }
-            }
-
-            return dst;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Image FromBytes(byte[] j2kdata, ParameterList parameters = null)
-        {
-            using MemoryStream stream = new(j2kdata);
-            return FromStream(stream, parameters);
-        }
-
-        public static Image FromStream(Stream stream, ParameterList parameters = null)
-        {
-            RandomAccessIO in_stream = new ISRandomAccessIO(stream);
-
-            var pl = parameters ?? new ParameterList(GetDefaultDecoderParameterList(decoder_pinfo));
-
-            // **** File Format ****
-            // If the codestream is wrapped in the jp2 fileformat, Read the
-            // file format wrapper
-            FileFormatReader ff = new FileFormatReader(in_stream);
-            ff.readFileFormat();
-            if (ff.JP2FFUsed)
-                in_stream.seek(ff.FirstCodeStreamPos);
-
-            // +----------------------------+
-            // | Instantiate decoding chain |
-            // +----------------------------+
-
-            // **** Header decoder ****
-            // Instantiate header decoder and read main header 
-            HeaderInfo hi = new HeaderInfo();
-            HeaderDecoder hd;
-            try
-            {
-                hd = new HeaderDecoder(in_stream, pl, hi);
-            }
-            catch (EndOfStreamException e)
-            {
-                throw new InvalidOperationException("Codestream too short or bad header, unable to decode.", e);
-            }
-
-            int nCompCod = hd.NumComps;
-            int nTiles = hi.sizValue.NumTiles;
-            DecoderSpecs decSpec = hd.DecoderSpecs;
-
-            // Get demixed bitdepths
-            int[] depth = new int[nCompCod];
-            for (int i = 0; i < nCompCod; i++)
-            {
-                depth[i] = hd.getOriginalBitDepth(i);
-            }
-
-            // **** Bit stream reader ****
-            BitstreamReaderAgent breader;
-            try
-            {
-                breader = BitstreamReaderAgent.createInstance(in_stream, hd, pl, decSpec, false, hi);
-            }
-            catch (IOException e)
-            {
-                throw new InvalidOperationException("Error while reading bit stream header or parsing packets.", e);
-            }
-            catch (ArgumentException e)
-            {
-                throw new InvalidOperationException("Cannot instantiate bit stream reader.", e);
-            }
-
-            // **** Entropy decoder ****
-            EntropyDecoder entdec;
-            try
-            {
-                entdec = hd.createEntropyDecoder(breader, pl);
-            }
-            catch (ArgumentException e)
-            {
-                throw new InvalidOperationException("Cannot instantiate entropy decoder.", e);
-            }
-
-            // **** ROI de-scaler ****
-            ROIDeScaler roids;
-            try
-            {
-                roids = hd.createROIDeScaler(entdec, pl, decSpec);
-            }
-            catch (ArgumentException e)
-            {
-                throw new InvalidOperationException("Cannot instantiate roi de-scaler.", e);
-            }
-
-            // **** Dequantizer ****
-            Dequantizer deq;
-            try
-            {
-                deq = hd.createDequantizer(roids, depth, decSpec);
-            }
-            catch (ArgumentException e)
-            {
-                throw new InvalidOperationException("Cannot instantiate dequantizer.", e);
-            }
-
-            // **** Inverse wavelet transform ***
-            InverseWT invWT;
-            try
-            {
-                // full page inverse wavelet transform
-                invWT = InverseWT.createInstance(deq, decSpec);
-            }
-            catch (ArgumentException e)
-            {
-                throw new InvalidOperationException("Cannot instantiate inverse wavelet transform.", e);
-            }
-
-            int res = breader.ImgRes;
-            invWT.ImgResLevel = res;
-
-            // **** Data converter **** (after inverse transform module)
-            ImgDataConverter converter = new ImgDataConverter(invWT, 0);
-
-            // **** Inverse component transformation **** 
-            InvCompTransf ictransf = new InvCompTransf(converter, decSpec, depth, pl);
-
-            // **** Color space mapping ****
-            BlkImgDataSrc color;
-            if (ff.JP2FFUsed && pl.getParameter("nocolorspace").Equals("off"))
-            {
-                try
-                {
-                    ColorSpace csMap = new ColorSpace(in_stream, hd, pl);
-                    BlkImgDataSrc channels = hd.createChannelDefinitionMapper(ictransf, csMap);
-                    BlkImgDataSrc resampled = hd.createResampler(channels, csMap);
-                    BlkImgDataSrc palettized = hd.createPalettizedColorSpaceMapper(resampled, csMap);
-                    color = hd.createColorSpaceMapper(palettized, csMap);
-                }
-                catch (ArgumentException e)
-                {
-                    throw new InvalidOperationException("Could not instantiate ICC profiler.", e);
-                }
-                catch (ColorSpaceException e)
-                {
-                    throw new InvalidOperationException("Error processing ColorSpace information.", e);
-                }
-            }
-            else
-            {
-                // Skip colorspace mapping
-                color = ictransf;
-            }
-
-            // This is the last image in the decoding chain and should be
-            // assigned by the last transformation:
-            BlkImgDataSrc decodedImage = color;
-            if (color == null)
-            {
-                decodedImage = ictransf;
-            }
-            var numComps = decodedImage.NumComps;
-            var imgWidth = decodedImage.ImgWidth;
-
-            int bytesPerPixel = numComps; // Assuming 8-bit components
-
-            // **** Copy to Bitmap ****
-            var pixelFormat = numComps switch
-            {
-                1 => PixelFormat.Format24bppRgb,
-                3 => PixelFormat.Format24bppRgb,
-                4 => PixelFormat.Format32bppArgb,
-                5 => PixelFormat.Format32bppArgb,
+                1 => [0, 0, 0],
+                2 => [0, 0, 0, 1],
+                3 => [2, 1, 0],
+                4 or 5 => [2, 1, 0, 3],
                 _ => throw new ApplicationException("Unsupported PixelFormat.  " + numComps + " components."),
             };
 
-            Bitmap dst = new Bitmap(decodedImage.ImgWidth, decodedImage.ImgHeight, pixelFormat);
+            // **** Copy to Bitmap ****
+            Bitmap dst = new Bitmap(imgWidth, imgHeight, pixelFormat);
 
-            Coord numTiles = decodedImage.getNumTiles(null);
+            // lock the whole bitmap once; locking partial regions of a 32bpp bitmap corrupts data on libgdiplus
+            BitmapData dstdata = dst.LockBits(new Rectangle(0, 0, imgWidth, imgHeight), ImageLockMode.WriteOnly, pixelFormat);
+
+            Coord numTiles = decodedImage.getNumTilesCoord();
+
+            DataBlkInt[] db = new DataBlkInt[numComps];
+            int[] ls = new int[numComps];
+            int[] mv = new int[numComps];
+            int[] fb = new int[numComps];
+            int[] k = new int[numComps];
+            int[] tmp = new int[numComps];
+            for (int i = 0; i < numComps; i++)
+            {
+                db[i] = new DataBlkInt();
+                int nomRangeBits = decodedImage.getNomRangeBits(i);
+                ls[i] = 1 << (nomRangeBits - 1);
+                mv[i] = (1 << nomRangeBits) - 1;
+                fb[i] = decodedImage.getFixedPoint(i);
+            }
 
             int tIdx = 0;
 
@@ -493,83 +303,47 @@ namespace CSJ2K
                     int tOffy = decodedImage.getCompULY(0)
                                 - (int)Math.Ceiling(decodedImage.ImgULY / (double)decodedImage.getCompSubsY(0));
 
-                    DataBlkInt[] db = new DataBlkInt[numComps];
-                    int[] ls = new int[numComps];
-                    int[] mv = new int[numComps];
-                    int[] fb = new int[numComps];
-                    for (int i = 0; i < numComps; i++)
+                    if (tOffx < 0 || tOffy < 0 || tOffx + width > imgWidth || tOffy + height > imgHeight)
                     {
-                        db[i] = new DataBlkInt();
-                        ls[i] = 1 << (decodedImage.getNomRangeBits(0) - 1);
-                        mv[i] = (1 << decodedImage.getNomRangeBits(0)) - 1;
-                        fb[i] = decodedImage.getFixedPoint(0);
+                        dst.UnlockBits(dstdata);
+                        throw new InvalidOperationException($"Tile {x},{y} ({tOffx},{tOffy} {width}x{height}) outside of image {imgWidth}x{imgHeight}.");
                     }
+
+                    byte[] rowvalues = new byte[width * outputBytesPerPixel];
+
                     for (int l = 0; l < height; l++)
                     {
-                        for (int i = numComps - 1; i >= 0; i--)
+                        // components must be requested in ascending order: requesting a component that
+                        // bypasses the inverse component transform (e.g. alpha) first corrupts its first row
+                        for (int i = 0; i < numComps; i++)
                         {
                             db[i].ulx = 0;
                             db[i].uly = l;
                             db[i].w = width;
                             db[i].h = 1;
                             decodedImage.getInternCompData(db[i], i);
+                            k[i] = db[i].offset + width - 1;
                         }
-
-                        int[] k = new int[numComps];
-                        int witdhMinus1 = width - 1;
-                        for (int i = 0; i < numComps; i++) k[i] = db[i].offset + witdhMinus1;
-
-                        if(bytesPerPixel > 4)
-                            bytesPerPixel = 4;
-                        else if(bytesPerPixel < 3)
-                            bytesPerPixel = 3;
-
-                        int outputBytesPerPixel = Math.Max(3, Math.Min(4, bytesPerPixel));
-                        byte[] rowvalues = new byte[width * outputBytesPerPixel];
 
                         for (int i = width - 1; i >= 0; i--)
                         {
-                            int[] tmp = new int[numComps];
-                            for (int j = numComps - 1; j >= 0; j--)
+                            for (int j = 0; j < numComps; j++)
                             {
-                                tmp[j] = (db[j].data_array[k[j]--] >> fb[j]) + ls[j];
-                                tmp[j] = (tmp[j] < 0) ? 0 : ((tmp[j] > mv[j]) ? mv[j] : tmp[j]);
+                                int v = (db[j].data_array[k[j]--] >> fb[j]) + ls[j];
+                                tmp[j] = (v < 0) ? 0 : ((v > mv[j]) ? mv[j] : v);
                             }
                             int offset = i * outputBytesPerPixel;
-                            switch (numComps)
-                            {
-                                case 1:
-                                    rowvalues[offset + 0] = (byte)tmp[0];
-                                    rowvalues[offset + 1] = (byte)tmp[0];
-                                    rowvalues[offset + 2] = (byte)tmp[0];
-                                    break;
-                                case 3:
-                                    rowvalues[offset + 0] = (byte)tmp[2];
-                                    rowvalues[offset + 1] = (byte)tmp[1];
-                                    rowvalues[offset + 2] = (byte)tmp[0];
-                                    break;
-                                case 4:
-                                case 5:
-                                    rowvalues[offset + 0] = (byte)tmp[2];
-                                    rowvalues[offset + 1] = (byte)tmp[1];
-                                    rowvalues[offset + 2] = (byte)tmp[0];
-                                    rowvalues[offset + 3] = (byte)tmp[3];
-                                    break;
-                                default:
-                                    throw new InvalidOperationException($"Invalid number of components: {numComps}");
-                            }
+                            for (int s = 0; s < outputBytesPerPixel; s++)
+                                rowvalues[offset + s] = (byte)tmp[slotComp[s]];
                         }
 
-                        BitmapData dstdata = dst.LockBits(new Rectangle(tOffx, tOffy + l, width, 1),
-                            ImageLockMode.WriteOnly, pixelFormat);
-
-                        IntPtr ptr = dstdata.Scan0;
+                        IntPtr ptr = dstdata.Scan0 + (tOffy + l) * dstdata.Stride + tOffx * outputBytesPerPixel;
                         System.Runtime.InteropServices.Marshal.Copy(rowvalues, 0, ptr, rowvalues.Length);
-                        dst.UnlockBits(dstdata);
                     }
                 }
             }
 
+            dst.UnlockBits(dstdata);
             return dst;
         }
 
@@ -635,6 +409,401 @@ namespace CSJ2K
             breader.setTile(0, 0);
 
             return ((FileBitstreamReaderAgent)breader).layerStarts;
+        }
+
+        #endregion
+
+        #region Validation
+
+        /// <summary>Maximum number of bytes accepted after the EOC marker</summary>
+        public const int MaxBytesAfterEOC = 64;
+
+        /// <summary> Checks that the data is a structurally valid JPEG 2000 image, either a raw
+        /// codestream (j2c/j2k) or a JP2 file, without decoding it. The JP2 boxes, the main header and
+        /// the tile-part headers are parsed and checked; the packet data is not.
+        /// </summary>
+        /// <param name="data">The image data</param>
+        /// <param name="truncatedIsError">If true, data that ends before the EOC marker of the
+        /// codestream is an error. Otherwise it is accepted (it can be decoded) as long as the JP2
+        /// header, if any, and the main header of the codestream are complete.
+        /// </param>
+        /// <returns>null if the data is valid, otherwise a short description of the problem</returns>
+        public static string Validate(byte[] data, bool truncatedIsError = false)
+        {
+            if (data == null)
+                return "no data";
+            return Validate(new ReadOnlySpan<byte>(data), truncatedIsError);
+        }
+
+        /// <summary> Checks that the data is a structurally valid JPEG 2000 image, either a raw
+        /// codestream (j2c/j2k) or a JP2 file, without decoding it. See <see cref="Validate(byte[], bool)"/>.
+        /// </summary>
+        public static string Validate(ReadOnlySpan<byte> data, bool truncatedIsError = false)
+        {
+            if (data.Length < 2)
+                return "too short";
+            if (data[0] == 0xFF && data[1] == 0x4F)
+                return ValidateCodestream(data, truncatedIsError, false, 0);
+            if (data.Length >= 8 && BinaryPrimitives.ReadUInt32BigEndian(data) == 12
+                && BinaryPrimitives.ReadUInt32BigEndian(data.Slice(4)) == FileFormatBoxes.JP2_SIGNATURE_BOX)
+                return ValidateJP2(data, truncatedIsError);
+            return "not JPEG 2000 data";
+        }
+
+        /// <summary> Checks the boxes of a JP2 file and then the codestream in its contiguous
+        /// codestream box. Bytes after that box count as bytes after the EOC marker.
+        /// </summary>
+        private static string ValidateJP2(ReadOnlySpan<byte> data, bool truncatedIsError)
+        {
+            int len = data.Length;
+            if (len < 12)
+                return "truncated JP2 header";
+            if (BinaryPrimitives.ReadUInt32BigEndian(data.Slice(8)) != 0x0D0A870A)
+                return "bad JP2 signature";
+
+            bool hasHeader = false;
+            uint width = 0, height = 0;
+            int numComps = 0;
+            long pos = 12;
+            for (int box = 0; ; box++)
+            {
+                if (pos >= len)
+                    return "no codestream box";
+                if (pos + 8 > len)
+                    return "truncated JP2 header";
+                long lbox = BinaryPrimitives.ReadUInt32BigEndian(data.Slice((int)pos));
+                int tbox = BinaryPrimitives.ReadInt32BigEndian(data.Slice((int)pos + 4));
+                int hlen = 8;
+                bool toEnd = false;
+                if (lbox == 1)
+                {
+                    if (pos + 16 > len)
+                        return "truncated JP2 header";
+                    ulong xlbox = BinaryPrimitives.ReadUInt64BigEndian(data.Slice((int)pos + 8));
+                    if (xlbox < 16 || xlbox > int.MaxValue)
+                        return "bad box length at " + pos;
+                    lbox = (long)xlbox;
+                    hlen = 16;
+                }
+                else if (lbox == 0)
+                {
+                    lbox = len - pos;
+                    toEnd = true;
+                }
+                else if (lbox < 8)
+                {
+                    return "bad box length at " + pos;
+                }
+                long end = pos + lbox;
+                bool boxTruncated = end > len;
+
+                if (box == 0 && tbox != FileFormatBoxes.FILE_TYPE_BOX)
+                    return "no file type box";
+
+                if (tbox == FileFormatBoxes.CONTIGUOUS_CODESTREAM_BOX)
+                {
+                    if (!hasHeader)
+                        return "no JP2 header box";
+                    ReadOnlySpan<byte> cs = data.Slice((int)pos + hlen, (int)(Math.Min(end, len) - pos - hlen));
+
+                    // The image header must describe the codestream
+                    if (cs.Length >= 42 && cs[0] == 0xFF && cs[1] == 0x4F && cs[2] == 0xFF && cs[3] == 0x51)
+                    {
+                        uint w = BinaryPrimitives.ReadUInt32BigEndian(cs.Slice(8)) - BinaryPrimitives.ReadUInt32BigEndian(cs.Slice(16));
+                        uint h = BinaryPrimitives.ReadUInt32BigEndian(cs.Slice(12)) - BinaryPrimitives.ReadUInt32BigEndian(cs.Slice(20));
+                        if (w != width || h != height || BinaryPrimitives.ReadUInt16BigEndian(cs.Slice(40)) != numComps)
+                            return "JP2 header does not match codestream";
+                    }
+
+                    long after = boxTruncated ? 0 : len - end;
+                    if (after > MaxBytesAfterEOC)
+                        return after + " bytes after codestream";
+                    if (cs.Length < 2 || cs[0] != 0xFF || cs[1] != 0x4F)
+                        return cs.Length < 2 ? "truncated JP2 header" : "no SOC marker";
+                    return ValidateCodestream(cs, truncatedIsError, !boxTruncated && !toEnd, (int)after);
+                }
+
+                // All other boxes come before the codestream and must be complete
+                if (boxTruncated)
+                    return "truncated JP2 header";
+                ReadOnlySpan<byte> content = data.Slice((int)pos + hlen, (int)(end - pos - hlen));
+                if (tbox == FileFormatBoxes.FILE_TYPE_BOX)
+                {
+                    if (box != 0 || content.Length < 8 || (content.Length - 8) % 4 != 0)
+                        return "bad file type box";
+                    bool jp2 = BinaryPrimitives.ReadInt32BigEndian(content) == FileFormatBoxes.FT_BR;
+                    for (int i = 8; i < content.Length && !jp2; i += 4)
+                        jp2 = BinaryPrimitives.ReadInt32BigEndian(content.Slice(i)) == FileFormatBoxes.FT_BR;
+                    if (!jp2)
+                        return "not a JP2 file type";
+                }
+                else if (tbox == FileFormatBoxes.JP2_HEADER_BOX)
+                {
+                    // The image header box comes first, followed by other boxes that must fit
+                    if (hasHeader)
+                        return "more than one JP2 header box";
+                    if (content.Length < 22 || BinaryPrimitives.ReadUInt32BigEndian(content) != 22
+                        || BinaryPrimitives.ReadInt32BigEndian(content.Slice(4)) != FileFormatBoxes.IMAGE_HEADER_BOX)
+                        return "bad image header box";
+                    height = BinaryPrimitives.ReadUInt32BigEndian(content.Slice(8));
+                    width = BinaryPrimitives.ReadUInt32BigEndian(content.Slice(12));
+                    numComps = BinaryPrimitives.ReadUInt16BigEndian(content.Slice(16));
+                    if (width == 0 || height == 0 || numComps == 0 || content[19] != FileFormatBoxes.IMB_C)
+                        return "bad image header box";
+                    for (int i = 22; i < content.Length; )
+                    {
+                        if (i + 8 > content.Length)
+                            return "bad JP2 header box";
+                        uint l = BinaryPrimitives.ReadUInt32BigEndian(content.Slice(i));
+                        if (l < 8 || l > content.Length - i)
+                            return "bad JP2 header box";
+                        i += (int)l;
+                    }
+                    hasHeader = true;
+                }
+                pos = end;
+            }
+        }
+
+        /// <summary> Checks a raw codestream.
+        /// </summary>
+        /// <param name="complete">The data is known to be complete (its length was given by a JP2
+        /// box), so running out of data is an error and not a truncation</param>
+        /// <param name="bytesAfter">Number of bytes following the data, counted with the bytes after EOC</param>
+        private static string ValidateCodestream(ReadOnlySpan<byte> data, bool truncatedIsError, bool complete, int bytesAfter)
+        {
+            int len = data.Length;
+            // Result for data that ends early
+            string Truncated(string msg) => truncatedIsError || complete ? msg : null;
+
+            // **** SIZ, must be the first marker segment ****
+            if (len < 6)
+                return "truncated main header";
+            if (data[2] != 0xFF || data[3] != 0x51)
+                return "no SIZ marker";
+            int lsiz = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(4));
+            if (6 + 36 > len || 4 + lsiz > len)
+                return "truncated main header";
+            ReadOnlySpan<byte> siz = data.Slice(4, lsiz);
+            if (lsiz < 41)
+                return "bad SIZ length";
+
+            ulong xsiz = BinaryPrimitives.ReadUInt32BigEndian(siz.Slice(4));
+            ulong ysiz = BinaryPrimitives.ReadUInt32BigEndian(siz.Slice(8));
+            ulong xosiz = BinaryPrimitives.ReadUInt32BigEndian(siz.Slice(12));
+            ulong yosiz = BinaryPrimitives.ReadUInt32BigEndian(siz.Slice(16));
+            ulong xtsiz = BinaryPrimitives.ReadUInt32BigEndian(siz.Slice(20));
+            ulong ytsiz = BinaryPrimitives.ReadUInt32BigEndian(siz.Slice(24));
+            ulong xtosiz = BinaryPrimitives.ReadUInt32BigEndian(siz.Slice(28));
+            ulong ytosiz = BinaryPrimitives.ReadUInt32BigEndian(siz.Slice(32));
+            int csiz = BinaryPrimitives.ReadUInt16BigEndian(siz.Slice(36));
+
+            if (xsiz <= xosiz || ysiz <= yosiz)
+                return "bad image size";
+            if (xtsiz == 0 || ytsiz == 0 || xtosiz > xosiz || ytosiz > yosiz || xtosiz + xtsiz <= xosiz || ytosiz + ytsiz <= yosiz)
+                return "bad tile size";
+            if (csiz < 1 || csiz > 16384 || lsiz != 38 + 3 * csiz)
+                return "bad number of components";
+            for (int c = 0, o = 38; c < csiz; c++, o += 3)
+            {
+                if ((siz[o] & 0x7F) > 37 || siz[o + 1] == 0 || siz[o + 2] == 0)
+                    return "bad component " + c;
+            }
+
+            ulong numTilesL = ((xsiz - xtosiz + xtsiz - 1) / xtsiz) * ((ysiz - ytosiz + ytsiz - 1) / ytsiz);
+            if (numTilesL > 65535)
+                return "too many tiles";
+            int numTiles = (int)numTilesL;
+
+            // **** Rest of the main header, up to the first SOT ****
+            bool hasCOD = false;
+            bool hasQCD = false;
+            int pos = 4 + lsiz;
+            while (true)
+            {
+                if (pos + 2 > len)
+                    return "truncated main header";
+                if (data[pos] != 0xFF)
+                    return "bad marker at " + pos;
+                int m = data[pos + 1];
+                if (m == 0x90) // SOT
+                    break;
+                if (m >= 0x30 && m <= 0x3F) // reserved markers without segment
+                {
+                    pos += 2;
+                    continue;
+                }
+                if (m == 0x4F || m == 0x51 || m == 0x93 || m == 0xD9 || m == 0x91 || m == 0x92 || m == 0x58 || m == 0x61)
+                    return "unexpected marker FF" + m.ToString("X2") + " in main header";
+                if (pos + 4 > len)
+                    return "truncated main header";
+                int lseg = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(pos + 2));
+                if (lseg < 2)
+                    return "bad marker length at " + pos;
+                if (pos + 2 + lseg > len)
+                    return "truncated main header";
+                if (m == 0x52) // COD
+                {
+                    string err = CheckCOD(data.Slice(pos + 2, lseg));
+                    if (err != null)
+                        return err;
+                    hasCOD = true;
+                }
+                else if (m == 0x5C) // QCD
+                {
+                    if (lseg < 4)
+                        return "bad QCD";
+                    hasQCD = true;
+                }
+                pos += 2 + lseg;
+            }
+            if (!hasCOD)
+                return "no COD marker";
+            if (!hasQCD)
+                return "no QCD marker";
+
+            // **** Tile-parts ****
+            // Number of tile-parts read per tile, to check their order and that all tiles are present
+            byte[] rented = null;
+            Span<byte> tileParts = numTiles <= 1024
+                ? stackalloc byte[numTiles]
+                : (rented = System.Buffers.ArrayPool<byte>.Shared.Rent(numTiles)).AsSpan(0, numTiles);
+            try
+            {
+                tileParts.Clear();
+                while (true)
+                {
+                    if (pos >= len)
+                        return Truncated("truncated, no EOC");
+                    if (pos + 2 > len)
+                        return Truncated("truncated");
+                    if (data[pos] != 0xFF)
+                        return "bad marker at " + pos;
+                    int m = data[pos + 1];
+                    if (m == 0xD9) // EOC
+                    {
+                        int trailing = len - pos - 2 + bytesAfter;
+                        if (trailing > MaxBytesAfterEOC)
+                            return trailing + " bytes after EOC";
+                        for (int t = 0; t < numTiles; t++)
+                        {
+                            if (tileParts[t] == 0)
+                                return "missing tile " + t;
+                        }
+                        return null;
+                    }
+                    if (m != 0x90)
+                        return "expected SOT at " + pos + ", found FF" + m.ToString("X2");
+                    if (pos + 12 > len)
+                        return Truncated("truncated");
+
+                    int lsot = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(pos + 2));
+                    int isot = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(pos + 4));
+                    uint psot = BinaryPrimitives.ReadUInt32BigEndian(data.Slice(pos + 6));
+                    int tpsot = data[pos + 10];
+                    int tnsot = data[pos + 11];
+                    if (lsot != 10)
+                        return "bad SOT length at " + pos;
+                    if (isot >= numTiles)
+                        return "bad tile index " + isot;
+                    if (tpsot != tileParts[isot] || tpsot == 255 || (tnsot != 0 && tpsot >= tnsot))
+                        return "out of order tile-part in tile " + isot;
+                    tileParts[isot] = (byte)(tpsot + 1);
+
+                    // End of the tile-part; Psot 0 means it extends up to the EOC marker
+                    long end;
+                    if (psot == 0)
+                    {
+                        end = -1;
+                        int min = Math.Max(pos + 12, len - 2 - MaxBytesAfterEOC);
+                        for (int e = len - 2; e >= min; e--)
+                        {
+                            if (data[e] == 0xFF && data[e + 1] == 0xD9)
+                            {
+                                end = e;
+                                break;
+                            }
+                        }
+                        if (end < 0)
+                            end = (long)len + 1; // no EOC, data is truncated
+                    }
+                    else
+                    {
+                        if (psot < 14)
+                            return "bad tile-part length at " + pos;
+                        end = pos + (long)psot;
+                    }
+
+                    // Tile-part header, up to SOD
+                    bool truncated = end > len;
+                    int limit = truncated ? len : (int)end;
+                    int hp = pos + 12;
+                    while (true)
+                    {
+                        if (hp + 2 > limit)
+                        {
+                            if (truncated)
+                                return Truncated("truncated in tile " + isot);
+                            return "no SOD in tile-part at " + pos;
+                        }
+                        if (data[hp] != 0xFF)
+                            return "bad marker at " + hp;
+                        int tm = data[hp + 1];
+                        if (tm == 0x93) // SOD
+                            break;
+                        if (tm >= 0x30 && tm <= 0x3F)
+                        {
+                            hp += 2;
+                            continue;
+                        }
+                        if (tm != 0x52 && tm != 0x53 && tm != 0x5C && tm != 0x5D && tm != 0x5E && tm != 0x5F
+                            && tm != 0x58 && tm != 0x61 && tm != 0x64)
+                            return "unexpected marker FF" + tm.ToString("X2") + " in tile-part header";
+                        if (hp + 4 > limit)
+                            return truncated ? Truncated("truncated in tile " + isot) : "bad tile-part header at " + pos;
+                        int lseg = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(hp + 2));
+                        if (lseg < 2)
+                            return "bad marker length at " + hp;
+                        if (hp + 2 + lseg > limit)
+                            return truncated ? Truncated("truncated in tile " + isot) : "bad tile-part header at " + pos;
+                        if (tm == 0x52)
+                        {
+                            string err = CheckCOD(data.Slice(hp + 2, lseg));
+                            if (err != null)
+                                return err;
+                        }
+                        hp += 2 + lseg;
+                    }
+
+                    if (truncated)
+                        return Truncated("truncated in tile " + isot);
+                    pos = (int)end;
+                }
+            }
+            finally
+            {
+                if (rented != null)
+                    System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+
+        /// <summary> Checks a COD marker segment (starting at Lcod) for values the decoder cannot handle.
+        /// </summary>
+        private static string CheckCOD(ReadOnlySpan<byte> cod)
+        {
+            if (cod.Length < 12)
+                return "bad COD length";
+            int progression = cod[3];
+            int layers = BinaryPrimitives.ReadUInt16BigEndian(cod.Slice(4));
+            int levels = cod[7];
+            int cbw = cod[8] + 2;
+            int cbh = cod[9] + 2;
+            int transform = cod[11];
+            if (progression > 4 || layers == 0 || levels > 32 || cbw > 10 || cbh > 10 || cbw + cbh > 12 || transform > 1)
+                return "bad COD";
+            if ((cod[2] & 0x01) != 0 && cod.Length < 12 + levels + 1) // user defined precincts
+                return "bad COD length";
+            return null;
         }
 
         #endregion
@@ -708,10 +877,86 @@ namespace CSJ2K
             return imgsrc;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        /// <summary> Creates a source for the encoder from a bitmap, with 8 bits per component.
+        /// Pixel formats with an alpha channel (including indexed formats whose palette has alpha)
+        /// give 4 components (R, G, B, A), all others 3 components (R, G, B).
+        /// </summary>
+        public static BlkImgDataSrc CreateEncodableSource(Bitmap bitmap)
+        {
+            if (bitmap == null)
+                throw new ArgumentNullException(nameof(bitmap));
+
+            int w = bitmap.Width;
+            int h = bitmap.Height;
+            PixelFormat format = bitmap.PixelFormat;
+            bool hasAlpha = Image.IsAlphaPixelFormat(format) || ((format & PixelFormat.Indexed) != 0 && PaletteHasAlpha(bitmap));
+            int nc = hasAlpha ? 4 : 3;
+
+            var comps = new int[nc][];
+            for (int c = 0; c < nc; c++)
+                comps[c] = new int[w * h];
+
+            // GDI+ converts any pixel format to (non premultiplied) BGRA
+            BitmapData data = bitmap.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                byte[] row = new byte[w * 4];
+                for (int y = 0, k = 0; y < h; y++)
+                {
+                    System.Runtime.InteropServices.Marshal.Copy(data.Scan0 + y * data.Stride, row, 0, row.Length);
+                    for (int x = 0, o = 0; x < w; x++, k++, o += 4)
+                    {
+                        comps[0][k] = row[o + 2];
+                        comps[1][k] = row[o + 1];
+                        comps[2][k] = row[o];
+                        if (hasAlpha)
+                            comps[3][k] = row[o + 3];
+                    }
+                }
+            }
+            finally
+            {
+                bitmap.UnlockBits(data);
+            }
+
+            return new PortableImageSource(w, h, nc, 8, new bool[nc], comps);
+        }
+
+        /// <summary> Whether an indexed bitmap's palette has transparent entries (the palette flags
+        /// are not reliable, libgdiplus does not set them).
+        /// </summary>
+        private static bool PaletteHasAlpha(Bitmap bitmap)
+        {
+            foreach (var entry in bitmap.Palette.Entries)
+            {
+                if (entry.A != 255)
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary> Encodes an image. A <see cref="Image"/> is encoded through
+        /// <see cref="CreateEncodableSource(Bitmap)"/>, so with alpha if its pixel format has it; other
+        /// objects need a registered <see cref="IImageCreator"/>.
+        /// </summary>
         public static byte[] ToBytes(object imageObject, ParameterList parameters = null)
         {
-            var imgsrc = ImageFactory.ToPortableImageSource(imageObject);
+            BlkImgDataSrc imgsrc;
+            if (imageObject is Bitmap bitmap)
+            {
+                imgsrc = CreateEncodableSource(bitmap);
+            }
+            else if (imageObject is Image image)
+            {
+                using var converted = new Bitmap(image);
+                imgsrc = CreateEncodableSource(converted);
+            }
+            else
+            {
+                imgsrc = ImageFactory.ToPortableImageSource(imageObject);
+                if (imgsrc == null)
+                    throw new ArgumentException("No image source for this object type; register an IImageCreator or use CreateEncodableSource", nameof(imageObject));
+            }
             return ToBytes(imgsrc, parameters);
         }
 
@@ -794,7 +1039,7 @@ namespace CSJ2K
                     rate = float.MaxValue;
                 }
             }
-            catch (FormatException e)
+            catch (FormatException)
             {
                 error("Invalid value in 'rate' option: " + pl.getParameter("rate"), 2);
                 return null;
@@ -817,7 +1062,7 @@ namespace CSJ2K
                     }
                 }
             }
-            catch (FormatException e)
+            catch (FormatException)
             {
                 error("Invalid value in 'tile_parts' option: " + pl.getParameter("tile_parts"), 2);
                 return null;
@@ -857,11 +1102,11 @@ namespace CSJ2K
                 refx = Int32.Parse(refs[0]);
                 refy = Int32.Parse(refs[1]);
             }
-            catch (IndexOutOfRangeException e)
+            catch (IndexOutOfRangeException)
             {
                 throw new ArgumentException("Error while parsing 'ref' " + "option");
             }
-            catch (FormatException e)
+            catch (FormatException)
             {
                 throw new ArgumentException("Invalid number type in " + "'ref' option");
             }
@@ -879,11 +1124,11 @@ namespace CSJ2K
                 trefx = Int32.Parse(trefs[0]);
                 trefy = Int32.Parse(trefs[1]);
             }
-            catch (IndexOutOfRangeException e)
+            catch (IndexOutOfRangeException)
             {
                 throw new ArgumentException("Error while parsing 'tref' " + "option");
             }
-            catch (FormatException e)
+            catch (FormatException)
             {
                 throw new ArgumentException("Invalid number type in " + "'tref' option");
             }
@@ -1065,6 +1310,9 @@ namespace CSJ2K
                             tempSop,
                             tempEph);
                         fileLength += cm.doCodestreamManipulation();
+                        // The codestream is rewritten in place and may have become shorter (the
+                        // temporary SOP and EPH markers are removed): drop what is left after it
+                        outStream.SetLength(fileLength);
                         //String res="";
                         if (pktspertp > 0)
                         {

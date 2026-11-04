@@ -623,8 +623,8 @@ namespace CSJ2K.j2k.image.invcomptransf
                 //Reference to output block data array
                 out_data = (int[])blk.Data;
 
-                //Create data array of blk if necessary
-                if (out_data == null)
+                //Create data array of blk if necessary (the caller may pass the array of a smaller block)
+                if (out_data == null || out_data.Length < h * w)
                 {
                     out_data = new int[h * w];
                     blk.Data = out_data;

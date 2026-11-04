@@ -24,9 +24,9 @@ namespace CSJ2K.Color
     /// </summary>
     /// <seealso cref="jj2000.j2k.colorspace.ColorSpace">
     /// </seealso>
-    /// <version> 	1.0
+    /// <version>     1.0
     /// </version>
-    /// <author> 	Bruce A. Kern
+    /// <author>     Bruce A. Kern
     /// </author>
     public abstract class ColorSpaceMapper : ImgDataAdapter, BlkImgDataSrc
     {
@@ -344,8 +344,8 @@ namespace CSJ2K.Color
 
 
             /* For each component, get a reference to the pixel data and
-			* set up working DataBlks for both integer and float output.
-			*/
+            * set up working DataBlks for both integer and float output.
+            */
             for (int i = 0; i < ncomps; ++i)
             {
 

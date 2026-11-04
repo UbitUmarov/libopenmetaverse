@@ -53,6 +53,9 @@ namespace CSJ2K.j2k.util
         /// <summary>The 'err' stream </summary>
         private readonly StreamWriter err;
 
+        // Encoding.UTF8 writes a byte order mark before the first message, which shows as garbage on a console
+        private static readonly System.Text.Encoding Utf8NoBom = new System.Text.UTF8Encoding(false);
+
         /// <summary>The printer that formats the text </summary>
         private readonly MsgPrinter mp;
 
@@ -68,10 +71,10 @@ namespace CSJ2K.j2k.util
         /// </param>
         protected StreamMsgLogger(Stream outstr, Stream errstr, int lw)
         {
-            var temp_writer = new StreamWriter(outstr, System.Text.Encoding.UTF8);
+            var temp_writer = new StreamWriter(outstr, Utf8NoBom);
             temp_writer.AutoFlush = true;
             out_Renamed = temp_writer;
-            var temp_writer2 = new StreamWriter(errstr, System.Text.Encoding.UTF8);
+            var temp_writer2 = new StreamWriter(errstr, Utf8NoBom);
             temp_writer2.AutoFlush = true;
             err = temp_writer2;
             mp = new MsgPrinter(lw);

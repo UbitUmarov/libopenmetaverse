@@ -26,6 +26,9 @@ namespace CSJ2K.Icc
     using ICCProfileVersion = CSJ2K.Icc.Types.ICCProfileVersion;
     using ICCDateTime = CSJ2K.Icc.Types.ICCDateTime;
     using FacilityManager = CSJ2K.j2k.util.FacilityManager;
+    using System.Buffers.Binary;
+    using System.Runtime.CompilerServices;
+    using System.Runtime.InteropServices;
 
 
     /// <summary>  This class models the ICCProfile file.  This file is a binary file which is divided 
@@ -42,9 +45,9 @@ namespace CSJ2K.Icc
     /// </seealso>
     /// <seealso cref="jj2000.j2k.icc.tags.ICCTagTable">
     /// </seealso>
-    /// <version> 	1.0
+    /// <version>     1.0
     /// </version>
-    /// <author> 	Bruce A. Kern
+    /// <author>     Bruce A. Kern
     /// </author>
 
     public abstract class ICCProfile
@@ -373,18 +376,20 @@ namespace CSJ2K.Icc
         private class BoxType : System.Collections.Generic.Dictionary<int, string>
         {
 
-            private static Dictionary<int, string> map =
-                new Dictionary<int, string>();
+            private static Dictionary<int, string> map = new Dictionary<int, string>();
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static void put(int type, string desc)
             {
                 map[type] = desc;
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public static string get_Renamed(int type)
             {
                 return map[type];
             }
+
 
             public static string colorSpecMethod(int meth)
             {
@@ -454,8 +459,8 @@ namespace CSJ2K.Icc
         {
             int x, y, z;
             x = ICCProfile.getInt(data, offset);
-            y = ICCProfile.getInt(data, offset + int_size);
-            z = ICCProfile.getInt(data, offset + 2 * int_size);
+            y = ICCProfile.getInt(data, offset + 4);
+            z = ICCProfile.getInt(data, offset + 8);
             return new XYZNumber(x, y, z);
         }
 
@@ -469,9 +474,9 @@ namespace CSJ2K.Icc
         public static ICCProfileVersion getICCProfileVersion(byte[] data, int offset)
         {
             byte major = data[offset];
-            byte minor = data[offset + byte_size];
-            byte resv1 = data[offset + 2 * byte_size];
-            byte resv2 = data[offset + 3 * byte_size];
+            byte minor = data[offset + 1];
+            byte resv1 = data[offset + 2];
+            byte resv2 = data[offset + 3];
             return new ICCProfileVersion(major, minor, resv1, resv2);
         }
 
@@ -485,11 +490,11 @@ namespace CSJ2K.Icc
         public static ICCDateTime getICCDateTime(byte[] data, int offset)
         {
             short wYear = ICCProfile.getShort(data, offset); // Number of the actual year (i.e. 1994)
-            short wMonth = ICCProfile.getShort(data, offset + ICCProfile.short_size); // Number of the month (1-12)
-            short wDay = ICCProfile.getShort(data, offset + 2 * ICCProfile.short_size); // Number of the day
-            short wHours = ICCProfile.getShort(data, offset + 3 * ICCProfile.short_size); // Number of hours (0-23)
-            short wMinutes = ICCProfile.getShort(data, offset + 4 * ICCProfile.short_size); // Number of minutes (0-59)
-            short wSeconds = ICCProfile.getShort(data, offset + 5 * ICCProfile.short_size); // Number of seconds (0-59)
+            short wMonth = ICCProfile.getShort(data, offset + 2); // Number of the month (1-12)
+            short wDay = ICCProfile.getShort(data, offset + 4); // Number of the day
+            short wHours = ICCProfile.getShort(data, offset + 6); // Number of hours (0-23)
+            short wMinutes = ICCProfile.getShort(data, offset + 8); // Number of minutes (0-59)
+            short wSeconds = ICCProfile.getShort(data, offset + 10); // Number of seconds (0-59)
             return new ICCDateTime(wYear, wMonth, wDay, wHours, wMinutes, wSeconds);
         }
 
@@ -531,14 +536,15 @@ namespace CSJ2K.Icc
         /// </param>
         /// <returns> native type from representation.
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static short getShort(byte[] bfr, int off, bool swap)
         {
-
-            int tmp0 = bfr[off] & 0xff; // Clear the sign extended bits in the int.
-            int tmp1 = bfr[off + 1] & 0xff;
-
-
-            return (short)(swap ? (tmp1 << BITS_PER_BYTE | tmp0) : (tmp0 << BITS_PER_BYTE | tmp1));
+           if (swap)
+                return Unsafe.ReadUnaligned<short>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bfr), off));
+            ref byte r = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bfr), off);
+            ushort a = r;
+            ushort b = Unsafe.ReadUnaligned<byte>(ref Unsafe.Add(ref r, 1));
+            return (short)((a << 8) | b);
         }
 
         /// <summary> Create a short from a two byte [].</summary>
@@ -548,11 +554,13 @@ namespace CSJ2K.Icc
         /// </param>
         /// <returns> native type from representation.
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static short getShort(byte[] bfr, int off)
         {
-            int tmp0 = bfr[off] & 0xff; // Clear the sign extended bits in the int.
-            int tmp1 = bfr[off + 1] & 0xff;
-            return (short)(tmp0 << BITS_PER_BYTE | tmp1);
+            ref byte r = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bfr), off);
+            ushort a = r;
+            ushort b = Unsafe.ReadUnaligned<byte>(ref Unsafe.Add(ref r, 1));
+            return (short)((a << 8) | b);
         }
 
         /// <summary> Separate bytes in an int into a byte array lsb to msb order.</summary>
@@ -560,6 +568,7 @@ namespace CSJ2K.Icc
         /// </param>
         /// <returns> byte [] containing separated int.
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static byte[] setInt(int d)
         {
             return setInt(d, new byte[BYTES_PER_INT]);
@@ -574,13 +583,14 @@ namespace CSJ2K.Icc
         /// </param>
         /// <returns> reference to output.
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static byte[] setInt(int d, byte[] b)
         {
-            if (b == null) b = new byte[BYTES_PER_INT];
-            for (int i = 0; i < BYTES_PER_INT; ++i)
+            b ??=  new byte[4];
+            for (int i = 0; i < 4; ++i)
             {
-                b[i] = (byte)(d & 0x0ff);
-                d = d >> BITS_PER_BYTE;
+                b[i] = (byte)d;
+                d = d >> 8;
             }
             return b;
         }
@@ -592,7 +602,7 @@ namespace CSJ2K.Icc
         /// </returns>
         public static byte[] setLong(long d)
         {
-            return setLong(d, new byte[BYTES_PER_INT]);
+            return setLong(d, new byte[8]);
         }
 
         /// <summary> Separate bytes in a long into a byte array lsb to msb order.
@@ -606,11 +616,11 @@ namespace CSJ2K.Icc
         /// </returns>
         public static byte[] setLong(long d, byte[] b)
         {
-            if (b == null) b = new byte[BYTES_PER_LONG];
-            for (int i = 0; i < BYTES_PER_LONG; ++i)
+            b ??= new byte[8];
+            for (int i = 0; i < 8; ++i)
             {
-                b[i] = (byte)(d & 0x0ff);
-                d = d >> BITS_PER_BYTE;
+                b[i] = (byte)d;
+                d = d >> 8;
             }
             return b;
         }
@@ -625,13 +635,21 @@ namespace CSJ2K.Icc
         /// </param>
         /// <returns> native type from representation.
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int getInt(byte[] bfr, int off, bool swap)
         {
+            if (swap)
+                return Unsafe.ReadUnaligned<int>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bfr), off));
 
-            int tmp0 = getShort(bfr, off, swap) & 0xffff; // Clear the sign extended bits in the int.
-            int tmp1 = getShort(bfr, off + 2, swap) & 0xffff;
-
-            return swap ? (tmp1 << BITS_PER_SHORT | tmp0) : (tmp0 << BITS_PER_SHORT | tmp1);
+            ref byte r = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bfr), off);
+            uint a = r;
+            a <<= 8;
+            a |= Unsafe.ReadUnaligned<byte>(ref Unsafe.Add(ref r, 1));
+            a <<= 8;
+            a |= Unsafe.ReadUnaligned<byte>(ref Unsafe.Add(ref r, 2));
+            a <<= 8;
+            a |= Unsafe.ReadUnaligned<byte>(ref Unsafe.Add(ref r, 3));
+            return (int)a;
         }
 
         /// <summary> Create an int from a byte [4].</summary>
@@ -641,13 +659,18 @@ namespace CSJ2K.Icc
         /// </param>
         /// <returns> native type from representation.
         /// </returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int getInt(byte[] bfr, int off)
         {
-
-            int tmp0 = getShort(bfr, off) & 0xffff; // Clear the sign extended bits in the int.
-            int tmp1 = getShort(bfr, off + 2) & 0xffff;
-
-            return tmp0 << BITS_PER_SHORT | tmp1;
+            ref byte r = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bfr), off);
+            uint a = r;
+            a <<= 8;
+            a |= Unsafe.ReadUnaligned<byte>(ref Unsafe.Add(ref r, 1));
+            a <<= 8;
+            a |= Unsafe.ReadUnaligned<byte>(ref Unsafe.Add(ref r, 2));
+            a <<= 8;
+            a |= Unsafe.ReadUnaligned<byte>(ref Unsafe.Add(ref r, 3));
+            return (int)a;
         }
 
         /// <summary> Create an long from a byte [8].</summary>
@@ -656,16 +679,13 @@ namespace CSJ2K.Icc
         /// <param name="off">start of data in array
         /// </param>
         /// <returns> native type from representation.
-        /// </returns>
+        /// </returns>\
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long getLong(byte[] bfr, int off)
         {
-
-            long tmp0 = getInt(bfr, off) & unchecked((int)0xffffffff); // Clear the sign extended bits in the int.
-            long tmp1 = getInt(bfr, off + 4) & unchecked((int)0xffffffff);
-
-            return tmp0 << BITS_PER_INT | tmp1;
+            ReadOnlySpan<byte> s = new ReadOnlySpan<byte>(bfr, off, 8);
+            return BinaryPrimitives.ReadInt64BigEndian(s);
         }
-
 
         /// <summary>signature    </summary>
         // Define the set of standard signature and type values
@@ -800,10 +820,13 @@ namespace CSJ2K.Icc
         {
             StringBuilder rep = new StringBuilder("[ICCProfile:");
             StringBuilder body = new StringBuilder();
-            body.Append(eol).Append(header);
-            body.Append(eol).Append(eol).Append(tags);
+            body.AppendLine();
+            body.Append(header);
+            body.AppendLine();
+            body.AppendLine();
+            body.Append(tags);
             rep.Append(ColorSpace.indent("  ", body));
-            return rep.Append("]").ToString();
+            return rep.Append(']').ToString();
         }
 
 
